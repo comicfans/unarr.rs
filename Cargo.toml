@@ -6,7 +6,7 @@ edition = "2018"
 
 [dependencies]
 
-[dependencies.libunarr_sys]
+[dependencies.unarr_sys]
 
 #git = "https://github.com/comicfans/libunarr_sys"
-path = "/home/wangxinyu/libunarr_sys"
+path = "/home/comicfans/working/libunarr_sys"
