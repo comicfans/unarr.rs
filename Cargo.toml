@@ -1,5 +1,5 @@
 [package]
-name = "unarr_rs"
+name = "unarr"
 version = "0.1.0"
 authors = ["wangxinyu <comicfans44@gmail.com>"]
 edition = "2018"
