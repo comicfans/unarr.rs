@@ -11,15 +11,16 @@ version = "0.2.54"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
-name = "libunarr_rs"
+name = "unarr_rs"
 version = "0.1.0"
 dependencies = [
- "libunarr_sys 0.1.0",
+ "unarr_sys 0.1.0 (git+https://github.com/comicfans/unarr_sys)",
 ]
 
 [[package]]
-name = "libunarr_sys"
+name = "unarr_sys"
 version = "0.1.0"
+source = "git+https://github.com/comicfans/unarr_sys#88e5c76d811e20e51a4f3d914332b1996dae8777"
 dependencies = [
  "ffi 0.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.54 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -28,3 +29,4 @@ dependencies = [
 [metadata]
 "checksum ffi 0.0.2 (registry+https://github.com/rust-lang/crates.io-index)" = "adcf808a1837153eaf7efe795ccc246b564801a7a20402619708eb5e124ee3be"
 "checksum libc 0.2.54 (registry+https://github.com/rust-lang/crates.io-index)" = "c6785aa7dd976f5fbf3b71cfd9cd49d7f783c1ff565a858d71031c6c313aa5c6"
+"checksum unarr_sys 0.1.0 (git+https://github.com/comicfans/unarr_sys)" = "<none>"

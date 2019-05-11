@@ -1,11 +1,10 @@
-extern crate libunarr_sys;
+extern crate unarr_sys;
 
-use libunarr_sys::ffi::*;
+use unarr_sys::ffi::*;
 
 use std::{
     ffi::{CStr, CString},
     path::Path,
-    rc::Weak
 };
 
 pub struct ArStream {
@@ -122,14 +121,14 @@ pub enum TryFormat {
 
 impl ArArchive {
 
-    fn iter(&mut self)->ArArchiveIterator {
+    pub fn iter(&mut self)->ArArchiveIterator {
         ArArchiveIterator{
             archive:self,
             first:true
         }
     }
 
-    fn reader_for(&mut self, entry: &ArEntry) -> std::io::Result<&mut EntryReader> {
+    pub fn reader_for(&mut self, entry: &ArEntry) -> std::io::Result<&mut EntryReader> {
 
         //entry must be read from this archive
         #[cfg(debug)]
@@ -150,7 +149,7 @@ impl ArArchive {
         return Ok(&mut self.reader);
     }
 
-    fn new(stream: ArStream, try_format: Option<TryFormat>) -> Option<ArArchive> {
+    pub fn new(stream: ArStream, try_format: Option<TryFormat>) -> Option<ArArchive> {
         let mut ptr: p_ar_archive;
 
         let mut tries = vec![];
@@ -198,7 +197,7 @@ impl ArArchive {
     }
 }
 
-struct ArArchiveIterator<'a> {
+pub struct ArArchiveIterator<'a> {
     archive: &'a mut ArArchive,
     first: bool,
 }
