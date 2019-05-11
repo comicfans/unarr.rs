@@ -1,5 +1,5 @@
 [package]
-name = "libunarr_rs"
+name = "unarr_rs"
 version = "0.1.0"
 authors = ["wangxinyu <comicfans44@gmail.com>"]
 edition = "2018"
@@ -8,5 +8,5 @@ edition = "2018"
 
 [dependencies.unarr_sys]
 
-#git = "https://github.com/comicfans/libunarr_sys"
-path = "/home/comicfans/working/libunarr_sys"
+git = "https://github.com/comicfans/unarr_sys"
+#path = "/home/comicfans/working/libunarr_sys"
