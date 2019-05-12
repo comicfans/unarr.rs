@@ -77,7 +77,7 @@ impl Drop for ArStream {
 }
 
 impl ArStream {
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Option<ArStream> {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> std::io::Result<ArStream> {
         let path_str_c = CString::new(path.as_ref().as_os_str().to_str().unwrap()).unwrap();
 
         let ptr: p_ar_stream;
@@ -87,10 +87,12 @@ impl ArStream {
         }
 
         if ptr.is_null() {
-            return None;
+            return Err(std::io::Error::new(std::io::ErrorKind::NotFound,"create ar_stream from file failed"));
+
+
         }
 
-        return Some(ArStream { ptr: ptr,mem: None });
+        return Ok(ArStream { ptr: ptr,mem: None });
     }
 
     pub fn from_memory(memory:Vec<u8>)->ArStream {
@@ -149,7 +151,7 @@ impl ArArchive {
         return Ok(&mut self.reader);
     }
 
-    pub fn new(stream: ArStream, try_format: Option<TryFormat>) -> Option<ArArchive> {
+    pub fn new(stream: ArStream, try_format: Option<TryFormat>) -> std::io::Result<ArArchive> {
         let mut ptr: p_ar_archive;
 
         let mut tries = vec![];
@@ -181,7 +183,7 @@ impl ArArchive {
             }
 
             if !ptr.is_null() {
-                return Some(ArArchive {
+                return Ok(ArArchive {
                     ptr: ptr,
                     stream: std::mem::ManuallyDrop::new(stream),
                     reader: EntryReader{
@@ -193,7 +195,7 @@ impl ArArchive {
             }
         }
 
-        return None;
+        return Err(std::io::Error::new(std::io::ErrorKind::NotFound,"create archive failed"));
     }
 }
 
@@ -235,7 +237,6 @@ impl <'a>Iterator for ArArchiveIterator<'a> {
                 }
             }
     
-
             //can not parse , maybe already EOF
             //(no file even parse first)
             //or advise to next reached EOF
@@ -245,12 +246,9 @@ impl <'a>Iterator for ArArchiveIterator<'a> {
                     eof = ar_at_eof(self.archive.ptr);
                 }
 
-                if eof {
-                    return None;
-                }
-
-                //even some error happened , we still try until EOF
-                continue;
+                //if parse entry failed, archive may not advise anymore
+                //so return 
+                return None;
             }
 
             //now we already parsed a entry
