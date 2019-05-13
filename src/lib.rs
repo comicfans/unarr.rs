@@ -334,7 +334,7 @@ impl<'a> Iterator for ArArchiveIterator<'a> {
             ptr: self.archive.ptr,
         };
 
-        assert!(!ret.offset > self.entry_offset);
+        assert!(ret.offset==0 || (ret.offset > self.entry_offset));
         self.entry_offset = ret.offset;
 
         return Some(ret);
