@@ -13,34 +13,74 @@ pub struct ArStream {
 }
 
 pub struct EntryReader{
+    ptr:p_ar_archive,
+    entry_offset: off64_t,
     readed: size_t,
     size: size_t,
-    ptr:p_ar_archive
+    skip_buf: *mut u8
+}
+
+const SKIP_BUF_SIZE : usize = 1024*1024*1024;
+fn skip_buf_layout()->std::alloc::Layout{
+    std::alloc::Layout::from_size_align_unchecked(SKIP_BUF_SIZE,1)
+}
+
+impl Drop for EntryReader {
+    fn drop(&mut self){
+        if !self.skip_buf.is_null(){
+            std::alloc::dealloc(self.skip_buf, skip_buf_layout());
+        }
+    }
 }
 
 impl std::io::Read  for EntryReader{
 
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize>{
 
-        if self.readed>= self.size {
+        assert!(self.readed <= self.size);
+
+        if self.readed == self.size {
             //already EOF
             return Ok(0);
         }
 
+        //we must check if caller changed to use other entry
+        unsafe{
+            if ar_entry_get_offset(self.ptr) != self.entry_offset {
+                if !ar_parse_entry_at(self.ptr, self.entry_offset) {
+                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput,"reset archive offset failed"));
+                }
+                //must resume last read pos. read up to readed bytes
+                //allocate temp memory to write unused bytes
+                if self.skip_buf.is_null() {
+                    //lazy create a 1MB buffer to skip bytes
+                    //maybe we can use stack buf to avoid this, but stack
+                    //maybe too small for quickly unpack enough bytes
+                    self.skip_buf = std::alloc::alloc(skip_buf_layout());
+                }
+
+                let skip = self.readed;
+                while skip > 0 {
+                    let to_read = skip.min(SKIP_BUF_SIZE);
+                    if ! ar_entry_uncompress(self.ptr,self.skip_buf as *mut c_void, to_read){
+                        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput,"skip buffer failed"));
+                    }
+                    skip -= to_read;
+                }
+            }
+        }
+
         let to_read = (self.size - self.readed).min(buf.len());
 
-        let result :bool;
         
         unsafe{
-            result = ar_entry_uncompress(self.ptr, buf.as_mut_ptr() as *mut c_void, to_read);
+            if ar_entry_uncompress(self.ptr, buf.as_mut_ptr() as *mut c_void, to_read){
+                return Ok(to_read);
+            }
         }
 
         //we always read-equal to left bytes, if still failed 
         //it must be IO error
-
-        if result {
-            return Ok(to_read);
-        }
 
         return Err(std::io::Error::new(std::io::ErrorKind::Other,"failed to read"));
     }
@@ -126,7 +166,7 @@ impl ArArchive {
     pub fn iter(&mut self)->ArArchiveIterator {
         ArArchiveIterator{
             archive:self,
-            first:true
+            entry_offset:0
         }
     }
 
@@ -147,6 +187,7 @@ impl ArArchive {
 
         self.reader.readed = 0;
         self.reader.size = entry.size;
+        self.reader.entry_offset = entry.offset;
 
         return Ok(&mut self.reader);
     }
@@ -189,7 +230,9 @@ impl ArArchive {
                     reader: EntryReader{
                         readed:0,
                         size:0,
-                        ptr:ptr
+                        ptr:ptr,
+                        entry_offset:0,
+                        skip_buf: std::ptr::null_mut()
                     }
                 });
             }
@@ -201,9 +244,10 @@ impl ArArchive {
 
 pub struct ArArchiveIterator<'a> {
     archive: &'a mut ArArchive,
-    first: bool,
+    entry_offset: off64_t
 }
 
+// ArEntry just keep attr as fields. unarr holds current 
 pub struct ArEntry{
     //at next ar_parse_entry call ,previous name is invalid , so we must make
     //this field owned (copy from c)
@@ -222,30 +266,31 @@ impl <'a>Iterator for ArArchiveIterator<'a> {
 
 
     fn next(&mut self) -> Option<ArEntry> {
-        loop {
             let parse_ok: bool;
 
             unsafe {
-                if self.first {
-                    //unarr said if use 0 as offset , it should always success
+                if self.entry_offset == 0{
 
                     parse_ok = ar_parse_entry_at(self.archive.ptr, 0);
-
-                    self.first = false;
                 } else {
+
+                    //must check if other call (reader) changed current offset
+                    unsafe{
+                        let current_offset = ar_entry_get_offset(self.archive.ptr);
+                        if current_offset != self.entry_offset {
+                            let result = ar_parse_entry_at(self.archive.ptr, self.entry_offset);
+                            if !result {
+                                return None;
+                            }
+                        }
+                    }
                     parse_ok = ar_parse_entry(self.archive.ptr);
                 }
             }
     
             //can not parse , maybe already EOF
-            //(no file even parse first)
             //or advise to next reached EOF
             if !parse_ok {
-                let eof: bool;
-                unsafe {
-                    eof = ar_at_eof(self.archive.ptr);
-                }
-
                 //if parse entry failed, archive may not advise anymore
                 //so return 
                 return None;
@@ -260,9 +305,7 @@ impl <'a>Iterator for ArArchiveIterator<'a> {
             let filetime: time64_t;
             unsafe {
                 let c_name = ar_entry_get_name(self.archive.ptr);
-                if c_name.is_null() {
-                    continue;
-                }
+                assert!(!c_name.is_null());
 
                 //unarr file name is UTF8 encoded
                 name = CStr::from_ptr(c_name).to_str().unwrap().into();
@@ -280,8 +323,10 @@ impl <'a>Iterator for ArArchiveIterator<'a> {
                 ptr: self.archive.ptr,
             };
 
+            assert!(!ret.offset > self.entry_offset);
+            self.entry_offset = ret.offset;
+
             return Some(ret);
-        }
     }
 }
 

@@ -11,7 +11,7 @@ version = "0.2.54"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
-name = "unarr_rs"
+name = "unarr"
 version = "0.1.0"
 dependencies = [
  "unarr_sys 0.1.0 (git+https://github.com/comicfans/unarr_sys)",
