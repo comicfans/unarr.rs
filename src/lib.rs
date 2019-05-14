@@ -87,10 +87,10 @@ impl std::io::Read for EntryReader {
         //we always read-equal to left bytes, if still failed
         //it must be IO error
 
-        return Err(std::io::Error::new(
+        Err(std::io::Error::new(
             std::io::ErrorKind::Other,
             "failed to read",
-        ));
+        ))
     }
 }
 
@@ -104,6 +104,8 @@ pub struct ArArchive {
     stream: std::mem::ManuallyDrop<ArStream>,
     reader: EntryReader,
 }
+
+unsafe impl Send for ArArchive {}
 
 impl Drop for ArArchive {
     fn drop(&mut self) {
