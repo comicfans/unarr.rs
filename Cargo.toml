@@ -10,3 +10,5 @@ edition = "2018"
 
 #git = "https://github.com/comicfans/unarr_sys"
 path = "/home/comicfans/working/unarr_sys"
+[dev-dependencies]
+rand = "0.6.*"

@@ -7,25 +7,29 @@ use std::{
     path::Path,
 };
 
+const SKIP_BUF_SIZE: usize = 1024 * 1024 * 1024;
+type Cookie = u64;
+const INVALID_READER_COOKIE: Cookie = 0;
+
 pub struct ArStream {
     ptr: p_ar_stream,
     mem: Option<Vec<u8>>,
 }
 
-pub struct EntryReader {
-    ptr: p_ar_archive,
+pub struct EntryReader<'a> {
+    archive: &'a ArArchive,
     entry_offset: off64_t,
     readed: size_t,
     size: size_t,
     skip_buf: *mut u8,
+    cookie: Cookie,
 }
 
-const SKIP_BUF_SIZE: usize = 1024 * 1024 * 1024;
 unsafe fn skip_buf_layout() -> std::alloc::Layout {
     std::alloc::Layout::from_size_align_unchecked(SKIP_BUF_SIZE, 1)
 }
 
-impl Drop for EntryReader {
+impl<'a> Drop for EntryReader<'a> {
     fn drop(&mut self) {
         if !self.skip_buf.is_null() {
             unsafe {
@@ -35,7 +39,47 @@ impl Drop for EntryReader {
     }
 }
 
-impl std::io::Read for EntryReader {
+impl<'a> EntryReader<'a> {
+    unsafe fn resume(&mut self) -> std::io::Result<usize> {
+        let need_reset_pos = (ar_entry_get_offset(self.archive.ptr) != self.entry_offset)
+            || (self.archive.last_reader_cookie.get() != self.cookie);
+
+        if !need_reset_pos {
+            return Ok(0);
+        }
+        self.archive.last_reader_cookie.set(self.cookie);
+        if !ar_parse_entry_at(self.archive.ptr, self.entry_offset) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "reset archive offset failed",
+            ));
+        }
+        //must resume last read pos. read up to readed bytes
+        //allocate temp memory to write unused bytes
+        if self.skip_buf.is_null() && self.readed > 0 {
+            //lazy create a 1MB buffer to skip bytes
+            //maybe we can use stack buf to avoid this, but stack
+            //maybe too small for quickly unpack enough bytes
+            self.skip_buf = std::alloc::alloc(skip_buf_layout());
+        }
+
+        let mut skip = self.readed;
+        while skip > 0 {
+            let to_read = skip.min(SKIP_BUF_SIZE);
+            if !ar_entry_uncompress(self.archive.ptr, self.skip_buf as *mut c_void, to_read) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "skip buffer failed",
+                ));
+            }
+            skip -= to_read;
+        }
+
+        return Ok(0);
+    }
+}
+
+impl<'a> std::io::Read for EntryReader<'a> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         assert!(self.readed <= self.size);
 
@@ -45,41 +89,17 @@ impl std::io::Read for EntryReader {
         }
 
         //we must check if caller changed to use other entry
+        //or created another reader
         unsafe {
-            if ar_entry_get_offset(self.ptr) != self.entry_offset {
-                if !ar_parse_entry_at(self.ptr, self.entry_offset) {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "reset archive offset failed",
-                    ));
-                }
-                //must resume last read pos. read up to readed bytes
-                //allocate temp memory to write unused bytes
-                if self.skip_buf.is_null() {
-                    //lazy create a 1MB buffer to skip bytes
-                    //maybe we can use stack buf to avoid this, but stack
-                    //maybe too small for quickly unpack enough bytes
-                    self.skip_buf = std::alloc::alloc(skip_buf_layout());
-                }
-
-                let mut skip = self.readed;
-                while skip > 0 {
-                    let to_read = skip.min(SKIP_BUF_SIZE);
-                    if !ar_entry_uncompress(self.ptr, self.skip_buf as *mut c_void, to_read) {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            "skip buffer failed",
-                        ));
-                    }
-                    skip -= to_read;
-                }
-            }
+            self.resume()?;
         }
 
         let to_read = (self.size - self.readed).min(buf.len());
 
         unsafe {
-            if ar_entry_uncompress(self.ptr, buf.as_mut_ptr() as *mut c_void, to_read) {
+            if ar_entry_uncompress(self.archive.ptr, buf.as_mut_ptr() as *mut c_void, to_read) {
+                self.readed += to_read;
+                assert!(self.readed <= self.size);
                 return Ok(to_read);
             }
         }
@@ -102,7 +122,8 @@ pub struct ArArchive {
     // they're useless out of Archive usage, so we bind their lifetime together
     // makes ArArchive self-contained ,without extra lifetime headache
     stream: std::mem::ManuallyDrop<ArStream>,
-    reader: EntryReader,
+    cookie_counter: std::cell::Cell<Cookie>,
+    last_reader_cookie: std::cell::Cell<Cookie>,
 }
 
 unsafe impl Send for ArArchive {}
@@ -177,19 +198,20 @@ pub enum TryFormat {
 }
 
 impl ArArchive {
-    pub fn iter(&mut self) -> ArArchiveIterator {
+    pub fn iter(&self) -> ArArchiveIterator {
         ArArchiveIterator {
             archive: self,
             entry_offset: 0,
         }
     }
 
-    pub fn reader_for(&mut self, entry: &ArEntry) -> std::io::Result<&mut EntryReader> {
+    pub fn reader_for<'a>(&'a self, entry: &ArEntry) -> std::io::Result<EntryReader<'a>> {
         //entry must be read from this archive
         #[cfg(debug)]
         assert!(entry.ptr == self.ptr);
 
         let ok: bool;
+
         unsafe {
             ok = ar_parse_entry_at(self.ptr, entry.offset);
         }
@@ -201,11 +223,18 @@ impl ArArchive {
             ));
         }
 
-        self.reader.readed = 0;
-        self.reader.size = entry.size;
-        self.reader.entry_offset = entry.offset;
+        self.cookie_counter.set(self.cookie_counter.get() + 1);
 
-        return Ok(&mut self.reader);
+        let ret = EntryReader {
+            archive: self,
+            readed: 0,
+            size: entry.size,
+            entry_offset: entry.offset,
+            skip_buf: std::ptr::null_mut(),
+            cookie: self.cookie_counter.get(),
+        };
+
+        return Ok(ret);
     }
 
     pub fn new(stream: ArStream, try_format: Option<TryFormat>) -> std::io::Result<ArArchive> {
@@ -243,13 +272,8 @@ impl ArArchive {
                 return Ok(ArArchive {
                     ptr: ptr,
                     stream: std::mem::ManuallyDrop::new(stream),
-                    reader: EntryReader {
-                        readed: 0,
-                        size: 0,
-                        ptr: ptr,
-                        entry_offset: 0,
-                        skip_buf: std::ptr::null_mut(),
-                    },
+                    cookie_counter: std::cell::Cell::new(INVALID_READER_COOKIE),
+                    last_reader_cookie: std::cell::Cell::new(INVALID_READER_COOKIE),
                 });
             }
         }
@@ -262,7 +286,7 @@ impl ArArchive {
 }
 
 pub struct ArArchiveIterator<'a> {
-    archive: &'a mut ArArchive,
+    archive: &'a ArArchive,
     entry_offset: off64_t,
 }
 
@@ -270,13 +294,27 @@ pub struct ArArchiveIterator<'a> {
 pub struct ArEntry {
     //at next ar_parse_entry call ,previous name is invalid , so we must make
     //this field owned (copy from c)
-    pub name: String,
-    pub offset: off64_t,
-    pub size: size_t,
-    pub time: time64_t,
+    name: String,
+    offset: off64_t,
+    size: size_t,
+    time: time64_t,
 
     #[cfg(debug)]
     ptr: p_ar_archive,
+}
+
+impl ArEntry {
+    pub fn name(&self)->&str{
+        self.name.as_str()
+    }
+
+    pub fn size(&self)->size_t {
+        self.size
+    }
+
+    pub fn time(&self)->time64_t {
+        self.time
+    }
 }
 
 impl<'a> Iterator for ArArchiveIterator<'a> {
@@ -284,6 +322,8 @@ impl<'a> Iterator for ArArchiveIterator<'a> {
 
     fn next(&mut self) -> Option<ArEntry> {
         let parse_ok: bool;
+
+        self.archive.last_reader_cookie.set(INVALID_READER_COOKIE);
 
         unsafe {
             if self.entry_offset == 0 {
@@ -336,20 +376,52 @@ impl<'a> Iterator for ArArchiveIterator<'a> {
             ptr: self.archive.ptr,
         };
 
-        assert!(ret.offset==0 || (ret.offset > self.entry_offset));
+        assert!(ret.offset == 0 || (ret.offset > self.entry_offset));
         self.entry_offset = ret.offset;
 
         return Some(ret);
     }
 }
 
-#[test]
-fn test() {
-    let from_file =
-        ArStream::from_file("/home/wangxinyu/Downloads/logtrail-6.6.1-0.1.31.zip").unwrap();
-    let mut ar = ArArchive::new(from_file, None).unwrap();
+#[cfg(test)]
+extern crate rand;
 
-    for f in ar.iter() {
-        println!("{}", f.name);
+mod tests {
+
+    use super::*;
+    use std::io::Read;
+
+    #[test]
+    fn test() {
+        let mut d = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+        d.push("tests/test.zip");
+
+        let from_file = ArStream::from_file(d).unwrap();
+
+        let ar = ArArchive::new(from_file, None).unwrap();
+
+        let entries: Vec<ArEntry> = ar.iter().collect();
+
+        for (i, f) in ar.iter().enumerate() {
+
+
+            let mut outer_buf = vec![0u8; f.size];
+            let mut outer_reader = ar.reader_for(&f).unwrap();
+
+            let read_first = rand::random::<usize>() % f.size;
+            let _= outer_reader.read_exact(&mut outer_buf[..read_first]);
+
+            let mut inner_vec = Vec::new();
+            for change_pos in entries.iter() {
+                let mut bin: Vec<u8> = Vec::new();
+                let mut reader = ar.reader_for(&change_pos).unwrap();
+                let _ = reader.read_to_end(&mut bin);
+                inner_vec.push(bin);
+            }
+
+            let _ =outer_reader.read_exact(&mut outer_buf[read_first..]);
+            assert_eq!(outer_buf, inner_vec[i]);
+        }
     }
 }
