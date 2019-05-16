@@ -1,6 +1,21 @@
 extern crate unarr_sys;
 
+#[cfg(feature = "default")]
+extern crate chardet;
+#[cfg(feature = "default")]
+extern crate encoding;
+
+extern crate locale;
+
+extern crate uchardet;
+
+use std::io::Write;
 use unarr_sys::ffi::*;
+
+#[cfg(feature = "default")]
+use encoding::label::encoding_from_whatwg_label;
+#[cfg(feature = "default")]
+use encoding::DecoderTrap;
 
 use std::{
     ffi::{CStr, CString},
@@ -116,7 +131,6 @@ impl<'a> std::io::Read for EntryReader<'a> {
 
 pub struct ArArchive {
     ptr: p_ar_archive,
-
     // unarr didn't force 1:1 relationship between stream:archive
     // but ar_stream in unarr is almost for abstract file and mem
     // they're useless out of Archive usage, so we bind their lifetime together
@@ -124,6 +138,8 @@ pub struct ArArchive {
     stream: std::mem::ManuallyDrop<ArStream>,
     cookie_counter: std::cell::Cell<Cookie>,
     last_reader_cookie: std::cell::Cell<Cookie>,
+    #[cfg(feature = "chardet")]
+    format: ArchiveFormat,
 }
 
 unsafe impl Send for ArArchive {}
@@ -190,7 +206,8 @@ impl ArStream {
     }
 }
 
-pub enum TryFormat {
+#[derive(Copy, Clone)]
+pub enum ArchiveFormat {
     Zip,
     Rar,
     _7z,
@@ -237,32 +254,32 @@ impl ArArchive {
         return Ok(ret);
     }
 
-    pub fn new(stream: ArStream, try_format: Option<TryFormat>) -> std::io::Result<ArArchive> {
+    pub fn new(stream: ArStream, try_format: Option<ArchiveFormat>) -> std::io::Result<ArArchive> {
         let mut ptr: p_ar_archive;
 
         let mut tries = vec![];
         if let Some(v) = try_format {
             tries.push(v);
         } else {
-            tries.push(TryFormat::Zip);
-            tries.push(TryFormat::Rar);
-            tries.push(TryFormat::_7z);
-            tries.push(TryFormat::Tar);
+            tries.push(ArchiveFormat::Zip);
+            tries.push(ArchiveFormat::Rar);
+            tries.push(ArchiveFormat::_7z);
+            tries.push(ArchiveFormat::Tar);
         }
 
         for try_format in tries.iter() {
             unsafe {
                 match try_format {
-                    TryFormat::Zip => {
+                    ArchiveFormat::Zip => {
                         ptr = ar_open_zip_archive(stream.ptr, false);
                     }
-                    TryFormat::Rar => {
+                    ArchiveFormat::Rar => {
                         ptr = ar_open_rar_archive(stream.ptr);
                     }
-                    TryFormat::_7z => {
+                    ArchiveFormat::_7z => {
                         ptr = ar_open_7z_archive(stream.ptr);
                     }
-                    TryFormat::Tar => {
+                    ArchiveFormat::Tar => {
                         ptr = ar_open_tar_archive(stream.ptr);
                     }
                 }
@@ -274,6 +291,8 @@ impl ArArchive {
                     stream: std::mem::ManuallyDrop::new(stream),
                     cookie_counter: std::cell::Cell::new(INVALID_READER_COOKIE),
                     last_reader_cookie: std::cell::Cell::new(INVALID_READER_COOKIE),
+                    #[cfg(feature = "chardet")]
+                    format: *try_format,
                 });
             }
         }
@@ -304,17 +323,52 @@ pub struct ArEntry {
 }
 
 impl ArEntry {
-    pub fn name(&self)->&str{
+    pub fn name(&self) -> &str {
         self.name.as_str()
     }
 
-    pub fn size(&self)->size_t {
+    pub fn size(&self) -> size_t {
         self.size
     }
 
-    pub fn time(&self)->time64_t {
+    pub fn time(&self) -> time64_t {
         self.time
     }
+}
+
+fn zip_guess_name(cstr: &CStr)-> Option<String>{
+
+
+
+    let iconv = locale::linux::Iconv::new("cp437","UTF-8");
+
+    let buf :std::vec::Vec<u8> = std::vec::Vec::new();
+    let res = iconv.convert()
+
+                    //convert back to raw string
+                    let coder_back = encoding_from_whatwg_label("cp437")?;
+
+                    let res = coder_back.encode(cstr, DecoderTrap::Ignore);
+
+                    if res.is_none(){
+                        return None;
+                    }
+                        
+                    //now name became raw string
+
+                    //guess encoding
+                    let result = chardet::detect(res.unwrap());
+                    // result.0 Encode
+                    // result.1 Confidence
+                    // result.2 Language
+
+                    // decode file into utf-8
+                    let dec = encoding_from_whatwg_label(chardet::charset2encoding(&result.0))?;
+                        
+                    let decoded = dec.decode(cstr.to_bytes(), DecoderTrap::Ignore);
+                    if decoded.is_err(){return None;}
+
+                    return decoded.unwrap();
 }
 
 impl<'a> Iterator for ArArchiveIterator<'a> {
@@ -360,8 +414,25 @@ impl<'a> Iterator for ArArchiveIterator<'a> {
             let c_name = ar_entry_get_name(self.archive.ptr);
             assert!(!c_name.is_null());
 
-            //unarr file name is UTF8 encoded
-            name = CStr::from_ptr(c_name).to_str().unwrap().into();
+            #[cfg(feature = "default")]
+            {
+                if let ArchiveFormat::Zip = self.archive.format {
+                    let c_str = CStr::from_ptr(c_name);
+                    let guessed = zip_guess_name(c_str);
+                    if guessed.is_none(){
+                        name = c_str.to_string_lossy().into_owned();
+                    }else{
+                        name = guessed.unwrap();
+                    }
+                }
+
+            }
+
+            #[cfg(not(feature = "default"))]
+            {
+                name = CStr::from_ptr(c_name).to_str().unwrap().into();
+            }
+
             offset = ar_entry_get_offset(self.archive.ptr);
             size = ar_entry_get_size(self.archive.ptr);
             filetime = ar_entry_get_filetime(self.archive.ptr);
@@ -392,6 +463,16 @@ mod tests {
     use std::io::Read;
 
     #[test]
+    fn test_encoding(){
+
+        let ar = ArArchive::new(ArStream::from_file("/home/wangxinyu/Downloads/6.3.15_API_Interfacedescription.zip").unwrap(),None).unwrap();
+
+        for ent in ar.iter() {
+            println!("{}",ent.name());
+        }
+    }
+
+    #[test]
     fn test() {
         let mut d = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
@@ -404,13 +485,11 @@ mod tests {
         let entries: Vec<ArEntry> = ar.iter().collect();
 
         for (i, f) in ar.iter().enumerate() {
-
-
             let mut outer_buf = vec![0u8; f.size];
             let mut outer_reader = ar.reader_for(&f).unwrap();
 
             let read_first = rand::random::<usize>() % f.size;
-            let _= outer_reader.read_exact(&mut outer_buf[..read_first]);
+            let _ = outer_reader.read_exact(&mut outer_buf[..read_first]);
 
             let mut inner_vec = Vec::new();
             for change_pos in entries.iter() {
@@ -420,7 +499,7 @@ mod tests {
                 inner_vec.push(bin);
             }
 
-            let _ =outer_reader.read_exact(&mut outer_buf[read_first..]);
+            let _ = outer_reader.read_exact(&mut outer_buf[read_first..]);
             assert_eq!(outer_buf, inner_vec[i]);
         }
     }

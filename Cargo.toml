@@ -1,10 +1,21 @@
 [package]
-name = "unarr"
-version = "0.1.0"
 authors = ["wangxinyu <comicfans44@gmail.com>"]
 edition = "2018"
+name = "unarr"
+version = "0.1.0"
 
 [dependencies]
+uchardet = "*"
+locale = "*"
+
+[dependencies.chardet]
+optional = true
+version = "*"
+
+[dependencies.encoding]
+optional = true
+version = "*"
+
 
 [dependencies.unarr_sys]
 
@@ -12,3 +23,7 @@ edition = "2018"
 path = "/home/comicfans/working/unarr_sys"
 [dev-dependencies]
 rand = "0.6.*"
+
+[features]
+default = ["chardet", "encoding"]
+guess_encoding = ["chardet", "encoding"]
