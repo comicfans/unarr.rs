@@ -5,10 +5,10 @@ extern crate chardet;
 #[cfg(feature = "default")]
 extern crate encoding;
 
-extern crate locale;
-
+extern crate codepage_437;
 extern crate uchardet;
 
+use codepage_437::{ToCp437, CP437_WINGDINGS};
 use std::io::Write;
 use unarr_sys::ffi::*;
 
@@ -336,39 +336,29 @@ impl ArEntry {
     }
 }
 
-fn zip_guess_name(cstr: &CStr)-> Option<String>{
+fn zip_guess_name(cstr: &CStr) -> Option<String> {
+    let buf: std::vec::Vec<u8> = std::vec::Vec::new();
 
+    //convert back to raw string
+    let raw_back = cstr.to_str().unwrap().to_cp437(&CP437_WINGDINGS).unwrap();
 
+    //now name became raw string
 
-    let iconv = locale::linux::Iconv::new("cp437","UTF-8");
+    //guess encoding
+    let result = chardet::detect(&raw_back);
+    // result.0 Encode
+    // result.1 Confidence
+    // result.2 Language
 
-    let buf :std::vec::Vec<u8> = std::vec::Vec::new();
-    let res = iconv.convert()
+    // decode file into utf-8
+    let dec = encoding_from_whatwg_label(chardet::charset2encoding(&result.0))?;
 
-                    //convert back to raw string
-                    let coder_back = encoding_from_whatwg_label("cp437")?;
+    let decoded = dec.decode(&raw_back, DecoderTrap::Ignore);
+    if decoded.is_err() {
+        return None;
+    }
 
-                    let res = coder_back.encode(cstr, DecoderTrap::Ignore);
-
-                    if res.is_none(){
-                        return None;
-                    }
-                        
-                    //now name became raw string
-
-                    //guess encoding
-                    let result = chardet::detect(res.unwrap());
-                    // result.0 Encode
-                    // result.1 Confidence
-                    // result.2 Language
-
-                    // decode file into utf-8
-                    let dec = encoding_from_whatwg_label(chardet::charset2encoding(&result.0))?;
-                        
-                    let decoded = dec.decode(cstr.to_bytes(), DecoderTrap::Ignore);
-                    if decoded.is_err(){return None;}
-
-                    return decoded.unwrap();
+    return Some(decoded.unwrap());
 }
 
 impl<'a> Iterator for ArArchiveIterator<'a> {
@@ -416,16 +406,20 @@ impl<'a> Iterator for ArArchiveIterator<'a> {
 
             #[cfg(feature = "default")]
             {
+                let c_str = CStr::from_ptr(c_name);
                 if let ArchiveFormat::Zip = self.archive.format {
-                    let c_str = CStr::from_ptr(c_name);
                     let guessed = zip_guess_name(c_str);
-                    if guessed.is_none(){
-                        name = c_str.to_string_lossy().into_owned();
-                    }else{
+                    if guessed.is_none() {
+                        //unarr try to decode as CP437 if not a utf8
+                        //encoding so we can assume the string is utf8
+                        //encoded (all value has corresponding utf8 represent)
+                        name = c_str.to_str().unwrap().to_string();
+                    } else {
                         name = guessed.unwrap();
                     }
+                } else {
+                    name = c_str.to_str().unwrap().to_string();
                 }
-
             }
 
             #[cfg(not(feature = "default"))]
@@ -463,12 +457,16 @@ mod tests {
     use std::io::Read;
 
     #[test]
-    fn test_encoding(){
-
-        let ar = ArArchive::new(ArStream::from_file("/home/wangxinyu/Downloads/6.3.15_API_Interfacedescription.zip").unwrap(),None).unwrap();
+    fn test_encoding() {
+        let ar = ArArchive::new(
+            ArStream::from_file("/home/comicfans/Downloads/中债国债到期收益率.zip")
+                .unwrap(),
+            None,
+        )
+        .unwrap();
 
         for ent in ar.iter() {
-            println!("{}",ent.name());
+            println!("{}", ent.name());
         }
     }
 

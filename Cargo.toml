@@ -3,10 +3,10 @@ authors = ["wangxinyu <comicfans44@gmail.com>"]
 edition = "2018"
 name = "unarr"
 version = "0.1.0"
-
 [dependencies]
-uchardet = "*"
+codepage-437 = "*"
 locale = "*"
+uchardet = "*"
 
 [dependencies.chardet]
 optional = true
@@ -16,14 +16,13 @@ version = "*"
 optional = true
 version = "*"
 
-
 [dependencies.unarr_sys]
-
-#git = "https://github.com/comicfans/unarr_sys"
 path = "/home/comicfans/working/unarr_sys"
+
 [dev-dependencies]
 rand = "0.6.*"
 
 [features]
 default = ["chardet", "encoding"]
 guess_encoding = ["chardet", "encoding"]
+ding = ["chardet", "encoding"]
