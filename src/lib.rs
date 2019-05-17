@@ -1,22 +1,21 @@
 extern crate unarr_sys;
 
-#[cfg(feature = "default")]
+#[cfg(not(feature = "no_guess"))]
 extern crate chardet;
-#[cfg(feature = "default")]
+#[cfg(not(feature = "no_guess"))]
 extern crate encoding;
-
+#[cfg(not(feature = "no_guess"))]
 extern crate codepage_437;
-extern crate uchardet;
-
-use codepage_437::{ToCp437, CP437_WINGDINGS};
-use std::io::Write;
-use unarr_sys::ffi::*;
-
-#[cfg(feature = "default")]
+#[cfg(not(feature = "no_guess"))]
 use encoding::label::encoding_from_whatwg_label;
-#[cfg(feature = "default")]
+#[cfg(not(feature = "no_guess"))]
 use encoding::DecoderTrap;
 
+
+
+use codepage_437::{ToCp437, CP437_WINGDINGS};
+
+use unarr_sys::ffi::*;
 use std::{
     ffi::{CStr, CString},
     path::Path,
@@ -336,16 +335,39 @@ impl ArEntry {
     }
 }
 
+#[cfg(not(feature = "no_guess"))]
 fn zip_guess_name(cstr: &CStr) -> Option<String> {
-    let buf: std::vec::Vec<u8> = std::vec::Vec::new();
 
-    //convert back to raw string
-    let raw_back = cstr.to_str().unwrap().to_cp437(&CP437_WINGDINGS).unwrap();
+    //try convert back to raw string. original input can be 
+    //just UTF8 or incorrected converted to utf8 from cp437
+    //
+    let try_as_utf8 = cstr.to_str();
 
-    //now name became raw string
+    if try_as_utf8.is_err() {
+        return None;
+    }
+
+    let try_back_437= try_as_utf8.unwrap().to_cp437(&CP437_WINGDINGS);
+
+    if try_back_437.is_err() {
+        // can not convert back to cp437
+        // since cp437 has 1:1 utf8 mapping
+        // so this utf8 can't be converted from cp437
+
+        return Some(try_as_utf8.unwrap().to_owned());
+        
+    }
+
+    //successfully convert back to cp437 , two possible:
+    //1. raw string from zip is just ascii, convert to utf8 without change value
+    //2. raw string is not cp437, and has other character which is not normal
+    //    file name char. 
+    //no matter which condition, we just guess encoding by chardet
+
+    let cp437bin = try_back_437.unwrap();
 
     //guess encoding
-    let result = chardet::detect(&raw_back);
+    let result = chardet::detect(&cp437bin);
     // result.0 Encode
     // result.1 Confidence
     // result.2 Language
@@ -353,7 +375,7 @@ fn zip_guess_name(cstr: &CStr) -> Option<String> {
     // decode file into utf-8
     let dec = encoding_from_whatwg_label(chardet::charset2encoding(&result.0))?;
 
-    let decoded = dec.decode(&raw_back, DecoderTrap::Ignore);
+    let decoded = dec.decode(&cp437bin, DecoderTrap::Ignore);
     if decoded.is_err() {
         return None;
     }
@@ -404,7 +426,7 @@ impl<'a> Iterator for ArArchiveIterator<'a> {
             let c_name = ar_entry_get_name(self.archive.ptr);
             assert!(!c_name.is_null());
 
-            #[cfg(feature = "default")]
+            #[cfg(not(feature = "no_guess"))]
             {
                 let c_str = CStr::from_ptr(c_name);
                 if let ArchiveFormat::Zip = self.archive.format {
@@ -422,9 +444,9 @@ impl<'a> Iterator for ArArchiveIterator<'a> {
                 }
             }
 
-            #[cfg(not(feature = "default"))]
+            #[cfg(feature = "no_guess")]
             {
-                name = CStr::from_ptr(c_name).to_str().unwrap().into();
+                name = CStr::from_ptr(c_name).to_string_lossy();
             }
 
             offset = ar_entry_get_offset(self.archive.ptr);
