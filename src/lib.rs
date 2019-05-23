@@ -54,12 +54,12 @@ impl<'a> Drop for EntryReader<'a> {
 }
 
 impl<'a> EntryReader<'a> {
-    unsafe fn resume(&mut self) -> std::io::Result<usize> {
+    unsafe fn resume(&mut self) -> std::io::Result<()> {
         let need_reset_pos = (ar_entry_get_offset(self.archive.ptr) != self.entry_offset)
             || (self.archive.last_reader_cookie.get() != self.cookie);
 
         if !need_reset_pos {
-            return Ok(0);
+            return Ok(());
         }
         self.archive.last_reader_cookie.set(self.cookie);
         if !ar_parse_entry_at(self.archive.ptr, self.entry_offset) {
@@ -89,7 +89,7 @@ impl<'a> EntryReader<'a> {
             skip -= to_read;
         }
 
-        Ok(0)
+        Ok(())
     }
 }
 
