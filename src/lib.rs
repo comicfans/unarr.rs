@@ -9,7 +9,6 @@ extern crate codepage_437;
 extern crate uchardet;
 
 use codepage_437::{ToCp437, CP437_WINGDINGS};
-use std::io::Write;
 use unarr_sys::ffi::*;
 
 #[cfg(feature = "default")]
@@ -90,7 +89,7 @@ impl<'a> EntryReader<'a> {
             skip -= to_read;
         }
 
-        return Ok(0);
+        Ok(0)
     }
 }
 
@@ -180,10 +179,7 @@ impl ArStream {
             ));
         }
 
-        return Ok(ArStream {
-            ptr: ptr,
-            mem: None,
-        });
+        Ok(ArStream { ptr, mem: None })
     }
 
     pub fn from_memory(memory: Vec<u8>) -> ArStream {
@@ -202,7 +198,7 @@ impl ArStream {
 
         ret.ptr = p;
 
-        return ret;
+        ret
     }
 }
 
@@ -224,7 +220,7 @@ impl ArArchive {
 
     pub fn reader_for<'a>(&'a self, entry: &ArEntry) -> std::io::Result<EntryReader<'a>> {
         //entry must be read from this archive
-        #[cfg(debug)]
+        #[cfg(debug_assertions)]
         assert!(entry.ptr == self.ptr);
 
         let ok: bool;
@@ -251,7 +247,7 @@ impl ArArchive {
             cookie: self.cookie_counter.get(),
         };
 
-        return Ok(ret);
+        Ok(ret)
     }
 
     pub fn new(stream: ArStream, try_format: Option<ArchiveFormat>) -> std::io::Result<ArArchive> {
@@ -287,7 +283,7 @@ impl ArArchive {
 
             if !ptr.is_null() {
                 return Ok(ArArchive {
-                    ptr: ptr,
+                    ptr,
                     stream: std::mem::ManuallyDrop::new(stream),
                     cookie_counter: std::cell::Cell::new(INVALID_READER_COOKIE),
                     last_reader_cookie: std::cell::Cell::new(INVALID_READER_COOKIE),
@@ -297,10 +293,10 @@ impl ArArchive {
             }
         }
 
-        return Err(std::io::Error::new(
+        Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "create archive failed",
-        ));
+        ))
     }
 }
 
@@ -318,7 +314,7 @@ pub struct ArEntry {
     size: size_t,
     time: time64_t,
 
-    #[cfg(debug)]
+    #[cfg(debug_assertions)]
     ptr: p_ar_archive,
 }
 
@@ -337,7 +333,6 @@ impl ArEntry {
 }
 
 fn zip_guess_name(cstr: &CStr) -> Option<String> {
-    let buf: std::vec::Vec<u8> = std::vec::Vec::new();
 
     //convert back to raw string
     let raw_back = cstr.to_str().unwrap().to_cp437(&CP437_WINGDINGS).unwrap();
@@ -358,7 +353,7 @@ fn zip_guess_name(cstr: &CStr) -> Option<String> {
         return None;
     }
 
-    return Some(decoded.unwrap());
+    Some(decoded.unwrap())
 }
 
 impl<'a> Iterator for ArArchiveIterator<'a> {
@@ -399,7 +394,7 @@ impl<'a> Iterator for ArArchiveIterator<'a> {
 
         let offset: off64_t;
         let size: size_t;
-        let filetime: time64_t;
+        let time: time64_t;
         unsafe {
             let c_name = ar_entry_get_name(self.archive.ptr);
             assert!(!c_name.is_null());
@@ -429,22 +424,22 @@ impl<'a> Iterator for ArArchiveIterator<'a> {
 
             offset = ar_entry_get_offset(self.archive.ptr);
             size = ar_entry_get_size(self.archive.ptr);
-            filetime = ar_entry_get_filetime(self.archive.ptr);
+            time = ar_entry_get_filetime(self.archive.ptr);
         }
 
         let ret = ArEntry {
-            name: name,
-            offset: offset,
-            size: size,
-            time: filetime,
-            #[cfg(debug)]
+            name,
+            offset,
+            size,
+            time,
+            #[cfg(debug_assertions)]
             ptr: self.archive.ptr,
         };
 
         assert!(ret.offset == 0 || (ret.offset > self.entry_offset));
         self.entry_offset = ret.offset;
 
-        return Some(ret);
+        Some(ret)
     }
 }
 
