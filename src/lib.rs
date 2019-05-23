@@ -6,8 +6,6 @@ extern crate chardet;
 extern crate encoding;
 #[cfg(not(feature = "no_guess"))]
 extern crate codepage_437;
-#[cfg(not(feature = "no_guess"))]
-extern crate uchardet;
 
 use unarr_sys::ffi::*;
 
@@ -21,7 +19,6 @@ use encoding::DecoderTrap;
 #[cfg(not(feature = "no_guess"))]
 use codepage_437::{ToCp437, CP437_WINGDINGS};
 
-use unarr_sys::ffi::*;
 use std::{
     ffi::{CStr, CString},
     path::Path,
