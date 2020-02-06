@@ -17,7 +17,7 @@ optional = true
 version = "*"
 
 [dependencies.unarr_sys]
-path = "/home/comicfans/working/unarr_sys"
+git = "https://github.com/comicfans/unarr_sys.git"
 
 [dev-dependencies]
 rand = "0.6.*"
